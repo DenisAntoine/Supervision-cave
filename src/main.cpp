@@ -10,6 +10,7 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <RunningAverage.h>
+#include <PubSubClient.h>
 ////////////////////////////////////////////
 #include <ESP8266WiFi.h>          //https://github.com/esp8266/Arduino
   //needed for library
@@ -276,6 +277,8 @@ void check_WiFi(void)
   {
     Serial.println("\nWiFi lost. Call connectMultiWiFi in loop");
     connectMultiWiFi();
+    client.setServer(mqtt_server, atoi(mqtt_port)); //a modifier
+    client.setCallback(callback);
   }
 }  
 
@@ -295,6 +298,7 @@ void check_status(void)
   // Check WiFi every WIFICHECK_INTERVAL (1) seconds.
   if ((current_millis > checkwifi_timeout) || (checkwifi_timeout == 0))
   {
+    Serial.println("check wifi");
     check_WiFi();
     checkwifi_timeout = current_millis + WIFICHECK_INTERVAL;
   }
@@ -303,12 +307,16 @@ void check_status(void)
   if ((current_millis > checkstatus_timeout) || (checkstatus_timeout == 0))
   {
     heartBeatPrint();
+    Serial.println("check heartbeat");
     checkstatus_timeout = current_millis + HEARTBEAT_INTERVAL;
   }
 
   // Check every PUBLISH_INTERVAL (60) seconds.
   if ((current_millis > mqtt_publish_timeout) || (mqtt_publish_timeout == 0))
   {
+    client.publish("test/toto", "123");
+    client.loop();
+    Serial.println("publie");
     //faire un truc pour publier
     mqtt_publish_timeout = current_millis + PUBLISH_INTERVAL;
   }
@@ -418,6 +426,60 @@ uint8_t connectMultiWiFi(void)
 
   return status;
 }
+
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+// ************************************************
+// reconnect MQTT
+// ************************************************
+
+void reconnect()
+{
+Serial.println("Reconnecte");
+while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    String clientId = "caveclient-";
+    clientId += String(random(0xffff), HEX);
+    
+    if (client.connect(clientId.c_str())) {
+      Serial.println("connected");
+      
+      client.subscribe("subscribe_topic");
+      delay(500);
+      client.loop();
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+// ************************************************
+// Callback MQTT
+// ************************************************
+void callback(char* topic, byte* payload, unsigned int length)
+{
+  StaticJsonDocument<256> doc;
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.println("] ");
+
+  deserializeJson(doc, payload, length);
+
+  /*if(doc.containsKey("ST")) {
+    Setpoint = doc["ST"];
+    Serial.print("Setpoint :");
+    Serial.println(Setpoint);
+  }*/
+
+}
+
+
 
   ////////////////////////////////////////
 
@@ -647,6 +709,8 @@ void setup() {
   {
     Serial.print("connected. Local IP: ");
     Serial.println(WiFi.localIP());
+    client.setServer(mqtt_server, atoi(mqtt_port)); //a modifier
+    client.setCallback(callback);
   }
   else
     Serial.println(ESP_wifiManager.getStatus(WiFi.status()));
@@ -660,8 +724,7 @@ void setup() {
   {
     saveFileFSConfigFile();
   }
-
-
+  
   // Capteur ultrason Trigger en sortie et Echo en entrée
   pinMode(PIN_TRIG, OUTPUT);
   pinMode(PIN_ECHO, INPUT);
@@ -685,9 +748,11 @@ void setup() {
 
 
 void loop() {
- currentMillis = millis();
- // Mesure temperature et Volume cuve
-  
+ check_status();
+}
+
+/*
+  currentMillis = millis();
   if (currentMillis - previousMillisDist > intervalDist) {
     // mesure de la distance et volume de cuve
     detachInterrupt(digitalPinToInterrupt(PIN_FLOW));
@@ -729,5 +794,4 @@ void loop() {
     Serial.print("L/min");
     Serial.print("\t");       // Print tab space
     }
-  check_status();
-}
+  */
