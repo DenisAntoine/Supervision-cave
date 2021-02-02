@@ -150,10 +150,13 @@ char mqtt_server  [MQTT_SERVER_MAX_LEN];
 char mqtt_port    [MQTT_SERVER_PORT_LEN]    = "1883";
 
 
+WiFiClient espClient;
+PubSubClient client(espClient);
 
 // Function Prototypes
 uint8_t connectMultiWiFi(void);
-
+void callback(char* topic, byte* payload, unsigned int length);
+void reconnect();
 
 //flag for saving data
 bool shouldSaveConfig = false;
@@ -255,8 +258,13 @@ void heartBeatPrint(void)
 {
   static int num = 1;
 
-  if (WiFi.status() == WL_CONNECTED)
+  if (WiFi.status() == WL_CONNECTED){
     Serial.print("H");        // H means connected to WiFi
+    if (!client.connected()) {
+    reconnect();
+    }
+    client.loop();
+  }
   else
     Serial.print("F");        // F means not connected to WiFi
 
@@ -277,8 +285,7 @@ void check_WiFi(void)
   {
     Serial.println("\nWiFi lost. Call connectMultiWiFi in loop");
     connectMultiWiFi();
-    client.setServer(mqtt_server, atoi(mqtt_port)); //a modifier
-    client.setCallback(callback);
+    
   }
 }  
 
@@ -309,13 +316,13 @@ void check_status(void)
     heartBeatPrint();
     Serial.println("check heartbeat");
     checkstatus_timeout = current_millis + HEARTBEAT_INTERVAL;
+    
   }
 
   // Check every PUBLISH_INTERVAL (60) seconds.
   if ((current_millis > mqtt_publish_timeout) || (mqtt_publish_timeout == 0))
   {
-    client.publish("test/toto", "123");
-    client.loop();
+    client.publish("cave/toto", "123");
     Serial.println("publie");
     //faire un truc pour publier
     mqtt_publish_timeout = current_millis + PUBLISH_INTERVAL;
@@ -427,8 +434,7 @@ uint8_t connectMultiWiFi(void)
   return status;
 }
 
-WiFiClient espClient;
-PubSubClient client(espClient);
+
 
 // ************************************************
 // reconnect MQTT
@@ -709,9 +715,7 @@ void setup() {
   {
     Serial.print("connected. Local IP: ");
     Serial.println(WiFi.localIP());
-    client.setServer(mqtt_server, atoi(mqtt_port)); //a modifier
-    client.setCallback(callback);
-  }
+    }
   else
     Serial.println(ESP_wifiManager.getStatus(WiFi.status()));
   //read updated parameters
@@ -725,6 +729,18 @@ void setup() {
     saveFileFSConfigFile();
   }
   
+
+  client.setServer("192.168.1.89", 1883); //a modifier
+  client.setCallback(callback);
+  Serial.print("Status Wifi");
+  Serial.println(ESP_wifiManager.getStatus(WiFi.status()));
+  delay(1000);
+  Serial.println("Reconnecte MQTT");
+  
+  reconnect();
+  client.publish("cave/test", "testok");
+  client.loop();
+
   // Capteur ultrason Trigger en sortie et Echo en entrée
   pinMode(PIN_TRIG, OUTPUT);
   pinMode(PIN_ECHO, INPUT);
