@@ -146,8 +146,11 @@ IPAddress dns2IP      = IPAddress(8, 8, 8, 8);
 #include <ESP_WiFiManager.h>              //https://github.com/khoih-prog/ESP_WiFiManager
 #define MQTT_SERVER_MAX_LEN             40
 #define MQTT_SERVER_PORT_LEN            6
+#define MQTT_TOPIC_LEN            40
+
 char mqtt_server  [MQTT_SERVER_MAX_LEN];
 char mqtt_port    [MQTT_SERVER_PORT_LEN]    = "1883";
+char mqtt_topic  [MQTT_TOPIC_LEN];
 
 
 WiFiClient espClient;
@@ -443,9 +446,11 @@ uint8_t connectMultiWiFi(void)
 void reconnect()
 {
 Serial.println("Reconnecte");
+uint8_t attempt = 3;
+
 while (!client.connected()) {
     Serial.print("Attempting MQTT connection...");
-    // Attempt to connect
+    // Attempt to connect 3 times
     String clientId = "caveclient-";
     clientId += String(random(0xffff), HEX);
     
@@ -461,6 +466,12 @@ while (!client.connected()) {
       Serial.println(" try again in 5 seconds");
       // Wait 5 seconds before retrying
       delay(5000);
+      attempt--;
+      if (attempt == 0) 
+      {
+      Serial.println(F("WiFi MQTT connection failed. Continuing with program..."));
+      return;
+      }
     }
   }
 }
@@ -475,33 +486,24 @@ void callback(char* topic, byte* payload, unsigned int length)
   Serial.print(topic);
   Serial.println("] ");
 
+  /*
   deserializeJson(doc, payload, length);
 
-  /*if(doc.containsKey("ST")) {
+  if(doc.containsKey("ST")) {
     Setpoint = doc["ST"];
     Serial.print("Setpoint :");
     Serial.println(Setpoint);
-  }*/
+  }
+  */
 
 }
 
-
-
-  ////////////////////////////////////////
+////////////////////////////////////////
 
 #define PIN_FLOW D5
 #define PIN_ECHO D7 // Echo Pin
 #define PIN_TRIG D6 // Trigger Pin
 #define ONE_WIRE_BUS D4  // DS18B20 pin 
-
-//Sonde de temperature--------------
-#define TEMP_PRECISION 9
-OneWire oneWire(ONE_WIRE_BUS);
-DallasTemperature DS18B20(&oneWire);
-DeviceAddress insideThermometer, outsideThermometer; 
-
-long duration, distance; // Duration used to calculate distance
-RunningAverage MoyGlissDistance(10);
 
 unsigned long currentMillis = 0;
 unsigned long previousMillisFlow = 0;
@@ -509,11 +511,20 @@ unsigned long intervalFlow = 1000;
 unsigned long previousMillisDist = 0;
 unsigned long intervalDist = 1000;
 
+//Sonde de temperature--------------
+#define TEMP_PRECISION 9
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature DS18B20(&oneWire);
+DeviceAddress insideThermometer, outsideThermometer; 
 
+//Capteur Ultrason
+long duration, distance; // Duration used to calculate distance
+RunningAverage MoyGlissDistance(10);
+
+//Debitmetre
 float calibrationFactor = 4.5;
 volatile byte pulseCount;
 byte pulse1Sec = 0;
-
 float flowRate;
 float flowLitres;
 float totalLitres;
@@ -542,11 +553,8 @@ float mesureDistance() // lance 5 mesures de la distance et retourne la moyenne 
     //Serial.println(distance);
     MoyGlissDistance.addValue(distance);
   }
-
   return MoyGlissDistance.getAverage();
 }
-
-
 
 
 void setup() {
@@ -764,6 +772,47 @@ void setup() {
 
 
 void loop() {
+ currentMillis = millis();
+  if (currentMillis - previousMillisDist > intervalDist) {
+    // mesure de la distance et volume de cuve
+    detachInterrupt(digitalPinToInterrupt(PIN_FLOW));
+    float hauteur = 1.07 - mesureDistance();
+    float volumel = 1000 * hauteur * (9.50460 - hauteur * (0.84256 + hauteur * 6.63434)); // formules magiques
+    //Temperatures
+    // request to all devices on the bus
+    DS18B20.requestTemperatures();
+    float tempOC = DS18B20.getTempC(outsideThermometer);
+    float tempIC = DS18B20.getTempC(insideThermometer); 
+    previousMillisDist = millis();
+    
+    Serial.print("Temp Out C: ");
+    Serial.println(tempOC);
+    Serial.print("Volume: ");
+    Serial.println(volumel);
+    Serial.print("Temp In C: ");
+    Serial.println(tempIC);
+    Serial.print("Hauteur: ");
+    Serial.println(hauteur);
+    // publier le tout
+
+    attachInterrupt(digitalPinToInterrupt(PIN_FLOW), pulseCounter, FALLING);
+  }
+  else if (currentMillis - previousMillisFlow > intervalFlow) {
+    pulse1Sec = pulseCount;
+    pulseCount = 0;
+    
+    flowRate = ((1000.0 / (millis() - previousMillisFlow)) * pulse1Sec) / calibrationFactor;
+    previousMillisFlow = millis();
+    flowLitres = (flowRate / 60);
+    totalLitres += flowLitres;
+    
+    // Print the flow rate for this second in litres / minute
+    Serial.println("Flow rate: ");
+    Serial.print(float(flowRate));  // Print the integer part of the variable
+    Serial.print("L/min");
+    Serial.print("\t");       // Print tab space
+    }
+ 
  check_status();
 }
 
