@@ -151,7 +151,8 @@ IPAddress dns2IP      = IPAddress(8, 8, 8, 8);
 char mqtt_server  [MQTT_SERVER_MAX_LEN];
 char mqtt_port    [MQTT_SERVER_PORT_LEN]    = "1883";
 char mqtt_topic  [MQTT_TOPIC_LEN];
-
+char message_buff[256];
+size_t nsize;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -219,6 +220,9 @@ bool loadFileFSConfigFile(void)
 
           if (json["mqtt_port"])  
             strncpy(mqtt_port,   json["mqtt_port"], sizeof(mqtt_port));
+
+          if (json["mqtt_topic"])  
+            strncpy(mqtt_topic,   json["mqtt_topic"], sizeof(mqtt_topic));
         }
 
         //serializeJson(json, Serial);
@@ -243,6 +247,7 @@ bool saveFileFSConfigFile(void)
 
   json["mqtt_server"] = mqtt_server;
   json["mqtt_port"]   = mqtt_port;
+  json["mqtt_topic"]   = mqtt_topic;
 
   File configFile = FileFS.open(configFileName, "w");
 
@@ -308,7 +313,7 @@ void check_status(void)
   // Check WiFi every WIFICHECK_INTERVAL (1) seconds.
   if ((current_millis > checkwifi_timeout) || (checkwifi_timeout == 0))
   {
-    Serial.println("check wifi");
+    //Serial.println("check wifi");
     check_WiFi();
     checkwifi_timeout = current_millis + WIFICHECK_INTERVAL;
   }
@@ -325,8 +330,13 @@ void check_status(void)
   // Check every PUBLISH_INTERVAL (60) seconds.
   if ((current_millis > mqtt_publish_timeout) || (mqtt_publish_timeout == 0))
   {
-    client.publish("cave/toto", "123");
-    Serial.println("publie");
+    
+    client.publish(mqtt_topic, message_buff, nsize);
+    client.loop();
+    Serial.print("publie");
+    Serial.println(mqtt_topic);
+    Serial.println(message_buff);
+    delay(1000);
     //faire un truc pour publier
     mqtt_publish_timeout = current_millis + PUBLISH_INTERVAL;
   }
@@ -505,11 +515,15 @@ void callback(char* topic, byte* payload, unsigned int length)
 #define PIN_TRIG D6 // Trigger Pin
 #define ONE_WIRE_BUS D4  // DS18B20 pin 
 
-unsigned long currentMillis = 0;
+
 unsigned long previousMillisFlow = 0;
-unsigned long intervalFlow = 1000;
+
 unsigned long previousMillisDist = 0;
-unsigned long intervalDist = 1000;
+
+float hauteur=0;
+float volumel=0;
+float tempOC=0;
+float tempIC=0;
 
 //Sonde de temperature--------------
 #define TEMP_PRECISION 9
@@ -518,16 +532,14 @@ DallasTemperature DS18B20(&oneWire);
 DeviceAddress insideThermometer, outsideThermometer; 
 
 //Capteur Ultrason
-long duration, distance; // Duration used to calculate distance
+//long duration, distance; // Duration used to calculate distance
 RunningAverage MoyGlissDistance(10);
 
 //Debitmetre
-float calibrationFactor = 4.5;
+
 volatile byte pulseCount;
-byte pulse1Sec = 0;
-float flowRate;
 float flowLitres;
-float totalLitres;
+float totalLitres =0;
 
 void IRAM_ATTR pulseCounter()
 {
@@ -580,6 +592,7 @@ void setup() {
   
   ESP_WMParameter custom_mqtt_server("mqtt_server", "mqtt_server", mqtt_server, MQTT_SERVER_MAX_LEN + 1);
   ESP_WMParameter custom_mqtt_port  ("mqtt_port",   "mqtt_port",   mqtt_port,   MQTT_SERVER_PORT_LEN + 1);
+  ESP_WMParameter custom_mqtt_topic  ("mqtt_topic",   "mqtt_topic",   mqtt_topic,   MQTT_TOPIC_LEN + 1);
 
   unsigned long startedAt = millis();
 
@@ -594,7 +607,7 @@ void setup() {
   
   ESP_wifiManager.addParameter(&custom_mqtt_server);
   ESP_wifiManager.addParameter(&custom_mqtt_port);
-
+  ESP_wifiManager.addParameter(&custom_mqtt_topic);
  
   ESP_wifiManager.setDebugOutput(true);
 
@@ -730,7 +743,7 @@ void setup() {
   
   strncpy(mqtt_server, custom_mqtt_server.getValue(), sizeof(mqtt_server));
   strncpy(mqtt_port, custom_mqtt_port.getValue(),     sizeof(mqtt_port));
-
+  strncpy(mqtt_topic, custom_mqtt_topic.getValue(),     sizeof(mqtt_topic));
   //save the custom parameters to FS
   if (shouldSaveConfig)
   {
@@ -746,7 +759,6 @@ void setup() {
   Serial.println("Reconnecte MQTT");
   
   reconnect();
-  client.publish("cave/test", "testok");
   client.loop();
 
   // Capteur ultrason Trigger en sortie et Echo en entrée
@@ -757,7 +769,6 @@ void setup() {
   // Flow Sensor
   pinMode(PIN_FLOW, INPUT_PULLUP);
   pulseCount = 0;
-  flowRate = 0.0;
   previousMillisFlow = 0;
   previousMillisDist = 0;
   attachInterrupt(digitalPinToInterrupt(PIN_FLOW), pulseCounter, FALLING);
@@ -772,32 +783,50 @@ void setup() {
 
 
 void loop() {
- currentMillis = millis();
-  if (currentMillis - previousMillisDist > intervalDist) {
+ float calibrationFactor = 4.5;
+ byte pulse1Sec = 0;
+ float flowRate=0;
+ unsigned long intervalDist = 30000;
+ unsigned long intervalFlow = 1000;
+
+ unsigned long currentMillis = millis();
+ 
+
+   if (currentMillis - previousMillisDist > intervalDist) {
     // mesure de la distance et volume de cuve
     detachInterrupt(digitalPinToInterrupt(PIN_FLOW));
-    float hauteur = 1.07 - mesureDistance();
-    float volumel = 1000 * hauteur * (9.50460 - hauteur * (0.84256 + hauteur * 6.63434)); // formules magiques
+    hauteur = 1.07 - mesureDistance();
+    hauteur = max(float(0), hauteur);
+    volumel = 1000 * hauteur * (9.50460 - hauteur * (0.84256 + hauteur * 6.63434)); // formules magiques
     //Temperatures
     // request to all devices on the bus
     DS18B20.requestTemperatures();
-    float tempOC = DS18B20.getTempC(outsideThermometer);
-    float tempIC = DS18B20.getTempC(insideThermometer); 
+    tempOC = DS18B20.getTempC(outsideThermometer);
+    tempIC = DS18B20.getTempC(insideThermometer); 
     previousMillisDist = millis();
-    
-    Serial.print("Temp Out C: ");
-    Serial.println(tempOC);
-    Serial.print("Volume: ");
-    Serial.println(volumel);
     Serial.print("Temp In C: ");
     Serial.println(tempIC);
+    Serial.print("Temp Out C: ");
+    Serial.println(tempOC);
+    
+    Serial.print("Volume: ");
+    Serial.println(volumel);
     Serial.print("Hauteur: ");
     Serial.println(hauteur);
     // publier le tout
+    // Publication 
+    StaticJsonDocument<256> doc; //document µJson pour MQTT
+    doc["tempOC"] = tempOC;
+    doc["tempIC"] = tempIC;
+    doc["volumel"] = volumel;
+    doc["hauteur"] = hauteur;
+    doc["totalLitres"] = totalLitres;
+    doc["flowLitres"] = flowLitres;
 
+    nsize = serializeJson(doc, message_buff);
     attachInterrupt(digitalPinToInterrupt(PIN_FLOW), pulseCounter, FALLING);
   }
-  else if (currentMillis - previousMillisFlow > intervalFlow) {
+  else if (currentMillis - previousMillisFlow > intervalFlow) { //remet le compteur a zero
     pulse1Sec = pulseCount;
     pulseCount = 0;
     
@@ -806,57 +835,13 @@ void loop() {
     flowLitres = (flowRate / 60);
     totalLitres += flowLitres;
     
-    // Print the flow rate for this second in litres / minute
+    /* Print the flow rate for this second in litres / minute
     Serial.println("Flow rate: ");
     Serial.print(float(flowRate));  // Print the integer part of the variable
     Serial.print("L/min");
     Serial.print("\t");       // Print tab space
+    */
     }
- 
- check_status();
+    check_status(); 
 }
 
-/*
-  currentMillis = millis();
-  if (currentMillis - previousMillisDist > intervalDist) {
-    // mesure de la distance et volume de cuve
-    detachInterrupt(digitalPinToInterrupt(PIN_FLOW));
-    float hauteur = 1.07 - mesureDistance();
-    float volumel = 1000 * hauteur * (9.50460 - hauteur * (0.84256 + hauteur * 6.63434)); // formules magiques
-    
-    
-    //Temperatures
-    // request to all devices on the bus
-    DS18B20.requestTemperatures();
-    float tempOC = DS18B20.getTempC(outsideThermometer);
-    float tempIC = DS18B20.getTempC(insideThermometer); 
-    previousMillisDist = millis();
-    
-    Serial.print("Temp Out C: ");
-    Serial.println(tempOC);
-    Serial.print("Volume: ");
-    Serial.println(volumel);
-    Serial.print("Temp In C: ");
-    Serial.println(tempIC);
-    Serial.print("Hauteur: ");
-    Serial.println(hauteur);
-    // publier le tout
-
-    attachInterrupt(digitalPinToInterrupt(PIN_FLOW), pulseCounter, FALLING);
-  }
-  else if (currentMillis - previousMillisFlow > intervalFlow) {
-    pulse1Sec = pulseCount;
-    pulseCount = 0;
-    
-    flowRate = ((1000.0 / (millis() - previousMillisFlow)) * pulse1Sec) / calibrationFactor;
-    previousMillisFlow = millis();
-    flowLitres = (flowRate / 60);
-    totalLitres += flowLitres;
-    
-    // Print the flow rate for this second in litres / minute
-    Serial.println("Flow rate: ");
-    Serial.print(float(flowRate));  // Print the integer part of the variable
-    Serial.print("L/min");
-    Serial.print("\t");       // Print tab space
-    }
-  */
