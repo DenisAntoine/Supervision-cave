@@ -21,27 +21,20 @@
   #include <ESP8266WiFiMulti.h>
   ESP8266WiFiMulti wifiMulti;
 
-  #include <FS.h>
+  //#include <FS.h>
 
-  #define USE_LITTLEFS      true
+  #include <LittleFS.h>
+  FS* filesystem = &LittleFS;
+  #define FileFS    LittleFS
+  #define FS_Name       "LittleFS"
   
-  #if USE_LITTLEFS
-    #include <LittleFS.h>
-    FS* filesystem = &LittleFS;
-    #define FileFS    LittleFS
-    #define FS_Name       "LittleFS"
-  #else
-    FS* filesystem = &SPIFFS;
-    #define FileFS    SPIFFS
-    #define FS_Name       "SPIFFS"
-  #endif
   #define ESP_getChipId()   (ESP.getChipId())
 
 #include <ArduinoJson.h>          //https://github.com/bblanchon/ArduinoJson
-char configFileName[] = "/config.json";
+char configFileName[] = "/toto.json";
 
 
-  // You only need to format the filesystem once
+// You only need to format the filesystem once
 //#define FORMAT_FILESYSTEM       true
 #define FORMAT_FILESYSTEM         false
 
@@ -144,13 +137,13 @@ IPAddress dns1IP      = gatewayIP;
 IPAddress dns2IP      = IPAddress(8, 8, 8, 8);
 
 #include <ESP_WiFiManager.h>              //https://github.com/khoih-prog/ESP_WiFiManager
-#define MQTT_SERVER_MAX_LEN             40
+#define MQTT_SERVER_MAX_LEN             20
 #define MQTT_SERVER_PORT_LEN            6
-#define MQTT_TOPIC_LEN            40
+#define MQTT_TOPIC_LEN            20
 
-char mqtt_server  [MQTT_SERVER_MAX_LEN];
+char mqtt_server  [MQTT_SERVER_MAX_LEN] = "192.168.1.89";
 char mqtt_port    [MQTT_SERVER_PORT_LEN]    = "1883";
-char mqtt_topic  [MQTT_TOPIC_LEN];
+char mqtt_topic  [MQTT_TOPIC_LEN] ="cave/json";
 char message_buff[256];
 size_t nsize;
 
@@ -163,7 +156,7 @@ void callback(char* topic, byte* payload, unsigned int length);
 void reconnect();
 
 //flag for saving data
-bool shouldSaveConfig = false;
+bool shouldSaveConfig = true;
 
 //callback notifying us of the need to save config
 void saveConfigCallback(void)
@@ -174,26 +167,67 @@ void saveConfigCallback(void)
 
 bool loadFileFSConfigFile(void)
 {
-  //clean FS, for testing
-  //FileFS.format();
-
   //read configuration from FS json
   Serial.println("Mounting FS...");
+  File configFile = FileFS.open(configFileName, "r");
+  delay(5000);
+  
+  if (!configFile)
+  {
+    Serial.println(F("Config File not found"));
+    return false;
+  }
+  else
+  {
+    Serial.print("Opened config file, size = ");
+    size_t configFileSize = configFile.size();
+    Serial.println(configFileSize);
+    std::unique_ptr<char[]> buf(new char[configFileSize + 1]);
+    configFile.readBytes(buf.get(), configFileSize);
+    configFile.close();
+    
+    
+    DynamicJsonDocument json(1024);
+    auto deserializeError = deserializeJson(json, buf.get());
+   
+    if ( deserializeError )
+    {
+      Serial.println("failed");
+      return false;
+    }
+    Serial.print("OK resulat : ");
+    serializeJsonPretty(json, Serial);
+    Serial.println();
 
-  if (FileFS.begin())
+    if (json["mqtt_server"])
+      strncpy(mqtt_server, json["mqtt_server"], sizeof(mqtt_server));
+
+    if (json["mqtt_port"])  
+      strncpy(mqtt_port,   json["mqtt_port"], sizeof(mqtt_port));
+
+    if (json["mqtt_topic"])  
+      strncpy(mqtt_topic,   json["mqtt_topic"], sizeof(mqtt_topic));
+   }  
+  Serial.println(F("\nConfig File successfully parsed"));
+  return true;
+  
+  /*if (FileFS.begin())
   {
     Serial.println("Mounted file system");
 
     if (FileFS.exists(configFileName))
     {
       //file exists, reading and loading
-      Serial.println("Reading config file");
+      Serial.print("Reading config file =");
+      Serial.println(configFileName);
       File configFile = FileFS.open(configFileName, "r");
+      delay(1000);
 
       if (configFile)
       {
         Serial.print("Opened config file, size = ");
         size_t configFileSize = configFile.size();
+        
         Serial.println(configFileSize);
 
         // Allocate a buffer to store contents of the file.
@@ -236,15 +270,14 @@ bool loadFileFSConfigFile(void)
     Serial.println("failed to mount FS");
     return false;
   }
-  return true;
+  return true;*/
 }
 
 bool saveFileFSConfigFile(void)
 {
-  Serial.println("Saving config");
-
-  DynamicJsonDocument json(1024);
-
+  Serial.println("Saving config FS");
+  StaticJsonDocument<128> json;
+  String jsondoc;
   json["mqtt_server"] = mqtt_server;
   json["mqtt_port"]   = mqtt_port;
   json["mqtt_topic"]   = mqtt_topic;
@@ -252,14 +285,31 @@ bool saveFileFSConfigFile(void)
   File configFile = FileFS.open(configFileName, "w");
 
   if (!configFile)
-  {
-    Serial.println("Failed to open config file for writing");
-  }
-
-  serializeJsonPretty(json, Serial);
-  serializeJson(json, configFile);
+    {
+      Serial.println("Failed to open config file for writing");
+      return false;
+    }
+  serializeJson(json, jsondoc);
+  Serial.println(jsondoc);
+  configFile.println(jsondoc);
   configFile.close();
   //end save
+  
+  File readFile = FileFS.open(configFileName, "r");
+  if (!readFile) {
+    // File not found | le fichier de test n'existe pas
+    Serial.println("Failed to open test file");
+    }
+  else {
+    // Display file content on serial port | Envoie le contenu du fichier test sur le port série
+    Serial.println();
+    Serial.println("Read file content: ");
+    while (readFile.available()) {
+      Serial.write(readFile.read());
+      }
+  }
+  readFile.close();
+  return true;
 }
 
 void heartBeatPrint(void)
@@ -577,13 +627,16 @@ void setup() {
 
   if (FORMAT_FILESYSTEM) 
     FileFS.format();
-
-      // Format FileFS if not yet
-    if (!FileFS.begin()){
+  // Format FileFS if not yet
+ 
+  if (!FileFS.begin())
+  {
     Serial.print(FS_Name);
     Serial.println(F(" failed! AutoFormatting."));
     FileFS.format();
   }
+  Serial.print(FS_Name);
+  Serial.println(F(" Loading FS configfile"));
   loadFileFSConfigFile();
 
   // The extra parameters to be configured (can be either global or just in the setup)
