@@ -607,13 +607,20 @@ float mesureDistance() // lance 5 mesures de la distance et retourne la moyenne 
     delayMicroseconds(10);
     digitalWrite(PIN_TRIG, LOW);
     float duration = pulseIn(PIN_ECHO, HIGH);
+    
     //Serial.print("duree :");
     //Serial.println(duration);
 
     float distance = (duration / 2) / 2910; //duree aller retour divisee par vitesse son
     //Serial.print("Distance :");
     //Serial.println(distance);
-    MoyGlissDistance.addValue(distance);
+    float previous = MoyGlissDistance.getAverage();
+    float ecart = (distance-previous)/previous;
+
+    if (ecart <1.1 && ecart> 0.9) //ecart inferieur a 10 pourcent
+      {
+      MoyGlissDistance.addValue(distance);
+      }
   }
   return MoyGlissDistance.getAverage();
 }
